@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Booking Orchestrator — Bright Smile Dental Clinic</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;color:#111}
+h1{font-size:24px} h2{font-size:18px}
+#chat{border:1px solid #ccc;border-radius:12px;padding:12px;height:340px;overflow:auto;background:#fafafa}
+.msg{margin:8px 0;padding:8px 12px;border-radius:12px;max-width:85%}
+.user{background:#dbeafe;margin-left:auto;text-align:right}
+.agent{background:#fff;border:1px solid #ddd}
+.row{display:flex;gap:8px;margin-top:10px}
+input[type=text]{flex:1;padding:10px;border:1px solid #ccc;border-radius:8px}
+button{padding:10px 14px;border-radius:8px;border:1px solid #111;background:#111;color:#fff;cursor:pointer}
+button.secondary{background:#fff;color:#111}
+.chip{border:1px solid #ccc;background:#fff;color:#111;border-radius:999px;padding:6px 10px;cursor:pointer}
+#trace,#bookings,#stats{font-size:14px;white-space:pre-wrap;background:#f3f4f6;padding:10px;border-radius:8px}
+.small{font-size:13px;color:#555}
+label{font-size:13px}
+</style>
+</head>
+<body>
+<h1>Voice Booking Orchestrator</h1>
+<p>Bright Smile Dental Clinic, Austin. Chat or voice. The orchestrator routes you to booking, FAQ, availability, or a human.</p>
+
+<div>
+<label>Your Deepgram API key (bring your own key, stored only in this browser, never in our database):
+<input type="password" id="dgkey" placeholder="Deepgram key, optional" style="width:100%;padding:8px;margin:6px 0">
+</label>
+<button class="secondary" onclick="saveKey()">Save key in this browser</button>
+<button class="secondary" onclick="clearKey()">Clear key</button>
+<span id="voicemode" class="small"></span>
+</div>
+
+<div id="chat"></div>
+<div class="row">
+<input type="text" id="input" placeholder="Try: Book a cleaning tomorrow at 10am">
+<button onclick="send()">Send</button>
+<button class="secondary" id="mic" onclick="toggleMic()">🎤 Speak</button>
+<button class="secondary" onclick="speakLast()">🔊 Hear last reply</button>
+</div>
+<div style="margin-top:8px">
+<button class="chip" onclick="quick('Book a cleaning tomorrow at 10am')">Book a cleaning tomorrow at 10am</button>
+<button class="chip" onclick="quick('What are your hours?')">What are your hours?</button>
+<button class="chip" onclick="quick('Do you take insurance?')">Do you take insurance?</button>
+<button class="chip" onclick="quick('What times are available Friday?')">What times are available Friday?</button>
+</div>
+
+<h2>Orchestrator trace</h2>
+<div id="trace">No messages yet.</div>
+<h2>Bookings and stats</h2>
+<button class="secondary" onclick="refresh()">Refresh bookings</button>
+<div id="stats"></div>
+<div id="bookings"></div>
+<p class="small">Demo data is synthetic. Deepgram is used only if you supply your own key. Without a key, voice falls back to your browser's speech recognition and speech synthesis. AWS deployment is bring-your-own-infra: see aws/README.md.</p>
+
+<script>
+const sessionId = 'demo-' + Math.random().toString(36).slice(2,8);
+let lastReply = '';
+let recog = null, listening = false;
+
+function dgKey(){ return localStorage.getItem('deepgram_key') || ''; }
+function saveKey(){ localStorage.setItem('deepgram_key', document.getElementById('dgkey').value.trim()); updateMode(); alert('Key saved in this browser only.'); }
+function clearKey(){ localStorage.removeItem('deepgram_key'); document.getElementById('dgkey').value=''; updateMode(); }
+async function updateMode(){
+  try{
+    const r = await fetch('/api/health'); const j = await r.json();
+    document.getElementById('voicemode').textContent = dgKey() ? 'Voice: Deepgram (your key)' : 'Voice: browser fallback (no Deepgram key)';
+    document.getElementById('dgkey').value = dgKey();
+  }catch(e){}
+}
+function addMsg(text, cls){
+  const d = document.createElement('div'); d.className = 'msg ' + cls; d.textContent = text;
+  document.getElementById('chat').appendChild(d); document.getElementById('chat').scrollTop = 99999;
+}
+function quick(t){ document.getElementById('input').value = t; send(); }
+async function send(){
+  const inp = document.getElementById('input'); const text = inp.value.trim(); if(!text) return;
+  addMsg(text, 'user'); inp.value = '';
+  const r = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sessionId, message: text})});
+  const j = await r.json();
+  lastReply = j.reply; addMsg(j.reply, 'agent');
+  document.getElementById('trace').textContent = 'intent: ' + j.intent + ' (' + j.confidence + ')\n' + j.trace.join('\n') + (j.booking ? '\nbooking: ' + JSON.stringify(j.booking) : '');
+  refresh();
+}
+async function speakLast(){
+  if(!lastReply) return;
+  const key = dgKey();
+  if(key){
+    const r = await fetch('/api/deepgram/tts', {method:'POST', headers:{'Content-Type':'application/json','X-Deepgram-Key': key}, body: JSON.stringify({text: lastReply})});
+    if(r.ok){ const blob = await r.blob(); new Audio(URL.createObjectURL(blob)).play(); return; }
+  }
+  const u = new SpeechSynthesisUtterance(lastReply); speechSynthesis.speak(u);
+}
+function toggleMic(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ alert('Browser speech recognition is not available in this browser. Type your message instead.'); return; }
+  if(listening && recog){ recog.stop(); return; }
+  recog = new SR(); recog.lang = 'en-US'; recog.interimResults = false;
+  recog.onresult = (e)=>{ document.getElementById('input').value = e.results[0][0].transcript; send(); };
+  recog.onend = ()=>{ listening=false; document.getElementById('mic').textContent='🎤 Speak'; };
+  recog.start(); listening=true; document.getElementById('mic').textContent='⏹ Stop';
+}
+document.getElementById('input').addEventListener('keydown', e=>{ if(e.key==='Enter') send(); });
+async function refresh(){
+  const b = await (await fetch('/api/bookings')).json();
+  const s = await (await fetch('/api/stats')).json();
+  document.getElementById('stats').textContent = 'Booked: ' + s.booked + ' | Conversations: ' + s.conversations + ' | Escalations: ' + s.escalations + '\nBy service: ' + JSON.stringify(s.by_service);
+  document.getElementById('bookings').textContent = b.length ? b.map(x=> x.id + ' | ' + x.service + ' | ' + x.staff + ' | ' + x.date + ' ' + x.start_time + '-' + x.end_time + ' | $' + x.price + ' | ' + x.status).join('\n') : 'No bookings yet.';
+}
+updateMode(); refresh();
+</script>
+</body>
+</html>

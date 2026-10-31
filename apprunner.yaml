@@ -1,0 +1,20 @@
+version: 1.0
+runtime: docker
+build:
+  commands:
+    build:
+      - echo "App Runner builds the Dockerfile in the user's own AWS account"
+run:
+  runtime-version: latest
+  command: python -m uvicorn app:app --host 0.0.0.0 --port 8000
+  network:
+    port: 8000
+  env:
+    # Users bring their own infra and key. Leave DEEPGRAM_API_KEY empty
+    # for bring-your-own-key mode, where each user supplies a key in
+    # the browser. Set it in App Runner secrets only if you want a
+    # shared server-side default key.
+    - name: DEEPGRAM_API_KEY
+      value: ""
+    - name: DATABASE_URL
+      value: "sqlite:///./data/bookings.db"
