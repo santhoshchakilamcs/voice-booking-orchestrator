@@ -12,7 +12,11 @@ Demo data is synthetic. No real patients, no real payments.
   3. Slot extraction: service, date, time from plain English.
   4. FAQ retrieval: TF-IDF over FAQ documents.
   5. Availability service: business hours (Mon-Fri 9-5, Sat 9-1, Sun closed),
-     staff conflicts, next-available proposal.
+     staff conflicts, next-available proposal. When a requested slot
+     is taken, the app now offers the next 2 available slots
+     (verified: with both staff booked Friday Nov 6, 2026 at 10am,
+     it offered 11:00 AM and 12:30 PM), while the first offered
+     slot stays the pending confirmation slot.
   6. Confirmation step: nothing is written until the user says yes.
   7. Booking write to SQLite, with a reference like BK-1001.
 - Low confidence (below 0.20) also escalates to a human, instead of guessing.
@@ -26,6 +30,9 @@ Demo data is synthetic. No real patients, no real payments.
 - How to use your key: paste it in the settings box on the demo page.
   It is stored only in your browser's localStorage, sent as an
   `X-Deepgram-Key` header, and never written to the database.
+  That localStorage-only rule still holds after the conflict
+  suggestion change: no key is stored in SQLite, and no key is
+  sent anywhere except the Deepgram endpoints you call.
 - Without a key: the page falls back to browser speech recognition
   and speech synthesis. Booking, FAQ, and escalation all still work.
 - A server-side default key can be set as `DEEPGRAM_API_KEY`, but it
@@ -58,6 +65,13 @@ Try these:
 - "I have severe pain" -> urgent human escalation
 
 ## Verified
+Conflict suggestions, Nov 1, 2026: booking a cleaning Friday Nov 6,
+2026 at 10am for both staff, then asking for the same slot,
+offered 11:00 AM and 12:30 PM. This also fixed a pre-existing
+bug found while testing: bookings are stored as "10:00 AM", but
+availability checks parsed them as ISO time and crashed, so the
+time parser now accepts both formats.
+
 Smoke-tested Oct 31, 2026:
 - HTTP health, frontend (200), and chat booking flow all passed.
 - Direct test: cleaning proposed for Monday Nov 2, 2026 (tomorrow, Nov 1,
