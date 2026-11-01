@@ -262,7 +262,15 @@ def find_staff(d, start, minutes):
             (d.isoformat(), staff)).fetchall()
         clash = False
         for r in rows:
-            s, e = time.fromisoformat(r["start_time"]), time.fromisoformat(r["end_time"])
+            # Bookings are stored in "10:00 AM" display format, not ISO.
+            # Parse both formats so availability checks do not crash
+            # once a booking exists (pre-existing bug, fixed here).
+            def _parse(t):
+                try:
+                    return time.fromisoformat(t)
+                except ValueError:
+                    return datetime.strptime(t, "%I:%M %p").time()
+            s, e = _parse(r["start_time"]), _parse(r["end_time"])
             if start < e and s < end:
                 clash = True
         if not clash:
@@ -290,6 +298,23 @@ def next_available(d, start, minutes):
         else:
             cur_t = nxt.time()
     return None, None, None
+
+def next_n_available(d, start, minutes, n=2):
+    """Next n available slots at or after the requested time, for
+    conflict suggestions. Returns a list of (date, time, staff).
+    The first slot is the same as next_available(); later slots
+    start after the previous slot ends plus 30 minutes."""
+    slots = []
+    cur_d, cur_t = d, start
+    for _ in range(n):
+        nd, nt, ns = next_available(cur_d, cur_t, minutes)
+        if nd is None:
+            break
+        slots.append((nd, nt, ns))
+        end_dt = datetime.combine(nd, nt) + timedelta(minutes=minutes + 30)
+        cur_d, cur_t = end_dt.date(), end_dt.time()
+    return slots
+
 
 def fmt_time(t):
     return t.strftime("%I:%M %p").lstrip("0")
@@ -471,8 +496,12 @@ def orchestrate(session_id, user_text):
             if staff:
                 reply = f"Yes, {fmt_date(d)} at {fmt_time(t)} is available for {svc['label']} with {staff}. Reply 'book it' if you want that slot."
             else:
-                nd, nt, ns = next_available(d, t, minutes)
-                reply = f"That slot is not available. The next available slot is {fmt_date(nd)} at {fmt_time(nt)} with {ns}."
+                slots = next_n_available(d, t, minutes, n=2)
+                if not slots:
+                    reply = "That slot is not available, and I could not find another slot in the next two weeks. Please ask for a human and we will help."
+                else:
+                    offered = "; ".join(f"{fmt_date(sd)} at {fmt_time(st)} with {ss}" for sd, st, ss in slots)
+                    reply = f"That slot is not available. The next available slots are: {offered}."
             log_conversation(session_id, user_text, intent, conf, reply)
             return reply, intent, conf, trace, None
         # book: propose, then confirm
@@ -481,17 +510,20 @@ def orchestrate(session_id, user_text):
         else:
             staff = None
         if not staff:
-            nd, nt, ns = next_available(d, t, minutes)
-            if nd is None:
+            slots = next_n_available(d, t, minutes, n=2)
+            if not slots:
                 reply = "I could not find an available slot in the next two weeks. Please ask for a human and we will help."
                 log_conversation(session_id, user_text, intent, conf, reply)
                 return reply, intent, conf, trace, None
+            nd, nt, ns = slots[0]
             end = (datetime.combine(nd, nt) + timedelta(minutes=minutes)).time()
             sess["pending"] = {"service": svc["label"], "staff": ns, "date": nd.isoformat(),
                                "start": fmt_time(nt), "end": fmt_time(end), "price": svc["price"]}
             trace.append("availability_service: requested slot busy -> proposed next available")
+            offered = "; ".join(f"{fmt_date(sd)} at {fmt_time(st)} with {ss}" for sd, st, ss in slots)
             reply = (f"That slot is not available. I can offer {svc['label']} with {ns} on {fmt_date(nd)} at {fmt_time(nt)} "
-                     f"for ${svc['price']}. Reply yes to confirm, or no to pick another time.")
+                     f"for ${svc['price']}. Reply yes to confirm, or no to pick another time. "
+                     f"Other available slots: {offered}.")
             log_conversation(session_id, user_text, intent, conf, reply)
             return reply, intent, conf, trace, None
         end = (datetime.combine(d, t) + timedelta(minutes=minutes)).time()
